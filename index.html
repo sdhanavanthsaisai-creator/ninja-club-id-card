@@ -75,8 +75,11 @@
             padding: 0
         }
 
+        /* overflow-x:clip on root only — clips stray overflow WITHOUT breaking
+           position:sticky (unlike overflow:hidden). Old browsers simply ignore it. */
         html {
             scroll-behavior: smooth;
+            overflow-x: clip;
             scrollbar-width: thin;
             scrollbar-color: #3a3d33 transparent
         }
@@ -88,9 +91,6 @@
             font-size: 15px;
             line-height: 1.7;
             min-height: 100vh;
-            overflow-x: hidden;
-            overflow-x: clip;
-            /* clip keeps position:sticky safe */
             -webkit-font-smoothing: antialiased;
         }
 
@@ -453,6 +453,13 @@
             text-transform: uppercase;
         }
 
+        @supports not (background: color-mix(in srgb, red, blue)) {
+            .topbar {
+                background: var(--bg)
+            }
+            /* older mobile browsers */
+        }
+
         .tb-l,
         .tb-r {
             display: flex;
@@ -752,6 +759,13 @@
             height: 280vh
         }
 
+        @supports (height: 1svh) {
+            .persp-track {
+                height: 280svh
+            }
+        }
+        /* stable on iOS toolbars */
+
         .persp-sticky {
             position: sticky;
             top: 0;
@@ -762,6 +776,12 @@
             justify-content: center;
             perspective: 260px;
             padding: 0 clamp(1.4rem, 6vw, 4rem);
+        }
+
+        @supports (height: 1svh) {
+            .persp-sticky {
+                height: 100svh
+            }
         }
 
         .persp-hint {
@@ -879,7 +899,8 @@
             border: 1px solid var(--line);
             background: var(--panel);
             aspect-ratio: 3/4;
-            overflow: hidden
+            overflow: hidden;
+            touch-action: pan-y
         }
 
         .vp-screen::after {
@@ -1413,6 +1434,8 @@
             transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
             transform-style: preserve-3d;
             outline: none;
+            touch-action: pan-y;
+            /* tilt on touch, but vertical scroll still works */
         }
 
         .idc-inner {
@@ -1941,6 +1964,12 @@
             .persp-track {
                 height: 240vh
             }
+
+            @supports (height: 1svh) {
+                .persp-track {
+                    height: 240svh
+                }
+            }
         }
 
         @media (max-width:760px) {
@@ -1955,6 +1984,12 @@
             .idc-name {
                 font-size: .78rem
             }
+
+            .persp-sticky {
+                perspective: 300px
+            }
+
+            /* gentler floor on small screens */
 
             .persp-text {
                 font-size: clamp(1.2rem, 5.4vw, 1.6rem);
@@ -1998,6 +2033,10 @@
                 display: none
             }
 
+            .scanbar {
+                display: none
+            }
+
             .persp-track {
                 height: auto;
                 min-height: 100vh
@@ -2017,6 +2056,7 @@
                 display: none
             }
         }
+        /* end prefers-reduced-motion */
     </style>
 </head>
 
@@ -2377,7 +2417,7 @@
             (function () {
                 "use strict";
                 const body = document.body;
-                const fine = matchMedia('(pointer:fine)').matches;
+                const fine = matchMedia('(pointer:fine)').matches;   // desktop: mouse
                 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
                 const $ = s => document.querySelector(s);
 
@@ -2406,7 +2446,7 @@
                     watchMeters();
                 }
                 if (reduced) { boot.remove(); body.classList.add('ready'); booted = true; watchMeters(); }
-                else { boot.addEventListener('click', enter); setTimeout(enter, 1500); }
+                else { boot.addEventListener('click', enter); setTimeout(enter, 1100); }
 
                 /* ---------- clock + uptime ---------- */
                 const clockEl = $('#clock');
@@ -2572,8 +2612,8 @@
                     }
                 }
 
-                /* ---------- NINJA ID: flip + tilt + holo ---------- */
-                const card = $('#idCard'), stage = $('#idStage');
+                /* ---------- NINJA ID: flip (tap works everywhere) ---------- */
+                const card = $('#idCard');
                 function flipCard() {
                     const f = card.classList.toggle('flipped');
                     card.setAttribute('aria-pressed', String(f));
@@ -2583,22 +2623,65 @@
                 card.addEventListener('keydown', e => {
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flipCard(); }
                 });
-                if (fine && !reduced) {
-                    stage.addEventListener('mousemove', e => {
-                        const r = card.getBoundingClientRect();
-                        const px = (e.clientX - r.left) / r.width - .5;
-                        const py = (e.clientY - r.top) / r.height - .5;
-                        card.style.transition = 'transform .12s ease-out';
-                        card.style.setProperty('--rx', (-py * 7).toFixed(2) + 'deg');
-                        card.style.setProperty('--ry', (px * 9).toFixed(2) + 'deg');
-                        card.style.setProperty('--hx', ((px + .5) * 100).toFixed(1) + '%');
-                        card.style.setProperty('--hy', ((py + .5) * 100).toFixed(1) + '%');
-                    });
-                    stage.addEventListener('mouseleave', () => {
-                        card.style.transition = 'transform .6s cubic-bezier(.22,1,.36,1)';
-                        card.style.setProperty('--rx', '0deg');
-                        card.style.setProperty('--ry', '0deg');
-                    });
+
+                /* ---------- TOUCH + MOUSE TILT (works on phones now) ----------
+                   Mouse: hover tilt, like before.
+                   Touch: drag a finger across the portrait / ID card and it tilts
+                          + the holo sheen follows. touch-action:pan-y keeps scroll alive. */
+                function bindTilt(surface, onMove, onReset) {
+                    let touching = false;
+                    const feed = (px, py) => onMove(px, py);
+                    if (fine) {
+                        surface.addEventListener('mousemove', e => {
+                            const r = surface.getBoundingClientRect();
+                            feed((e.clientX - r.left) / r.width - .5, (e.clientY - r.top) / r.height - .5);
+                        });
+                        surface.addEventListener('mouseleave', onReset);
+                    }
+                    surface.addEventListener('touchstart', () => { touching = true; }, { passive: true });
+                    surface.addEventListener('touchmove', e => {
+                        if (!touching) return;
+                        const t = e.touches[0];
+                        if (!t) return;
+                        const r = surface.getBoundingClientRect();
+                        feed((t.clientX - r.left) / r.width - .5, (t.clientY - r.top) / r.height - .5);
+                    }, { passive: true });
+                    const end = () => { if (touching) { touching = false; onReset(); } };
+                    surface.addEventListener('touchend', end);
+                    surface.addEventListener('touchcancel', end);
+                }
+
+                if (!reduced) {
+                    /* portrait tilt + parallax (mouse AND touch) */
+                    const vp = $('#vpScreen'), img = $('#portrait');
+                    bindTilt(vp,
+                        (px, py) => {
+                            vp.style.transition = 'transform .12s ease-out';
+                            vp.style.transform = `perspective(700px) rotateX(${(-py * 4).toFixed(2)}deg) rotateY(${(px * 5).toFixed(2)}deg)`;
+                            img.style.transform = `translate(${(px * -8).toFixed(1)}px,${(py * -8).toFixed(1)}px) scale(1.06)`;
+                        },
+                        () => {
+                            vp.style.transition = 'transform .6s cubic-bezier(.22,1,.36,1)';
+                            vp.style.transform = 'none'; img.style.transform = 'scale(1.04)';
+                        }
+                    );
+
+                    /* ID card tilt + holo (mouse AND touch) */
+                    const stage = $('#idStage');
+                    bindTilt(stage,
+                        (px, py) => {
+                            card.style.transition = 'transform .12s ease-out';
+                            card.style.setProperty('--rx', (-py * 7).toFixed(2) + 'deg');
+                            card.style.setProperty('--ry', (px * 9).toFixed(2) + 'deg');
+                            card.style.setProperty('--hx', ((px + .5) * 100).toFixed(1) + '%');
+                            card.style.setProperty('--hy', ((py + .5) * 100).toFixed(1) + '%');
+                        },
+                        () => {
+                            card.style.transition = 'transform .6s cubic-bezier(.22,1,.36,1)';
+                            card.style.setProperty('--rx', '0deg');
+                            card.style.setProperty('--ry', '0deg');
+                        }
+                    );
                 }
 
                 if (fine && !reduced) {
@@ -2627,19 +2710,6 @@
                     addEventListener('mouseup', () => body.classList.remove('cur-down'));
                     document.documentElement.addEventListener('mouseleave', () => { dot.style.opacity = ring.style.opacity = 0; shown = false; });
 
-                    /* ---------- portrait 3D drift ---------- */
-                    const vp = $('#vpScreen'), img = $('#portrait');
-                    vp.addEventListener('mousemove', e => {
-                        const r = vp.getBoundingClientRect();
-                        const px = (e.clientX - r.left) / r.width - .5, py = (e.clientY - r.top) / r.height - .5;
-                        vp.style.transition = 'transform .12s ease-out';
-                        vp.style.transform = `perspective(700px) rotateX(${(-py * 4).toFixed(2)}deg) rotateY(${(px * 5).toFixed(2)}deg)`;
-                        img.style.transform = `translate(${(px * -8).toFixed(1)}px,${(py * -8).toFixed(1)}px) scale(1.06)`;
-                    });
-                    vp.addEventListener('mouseleave', () => {
-                        vp.style.transition = 'transform .6s cubic-bezier(.22,1,.36,1)';
-                        vp.style.transform = 'none'; img.style.transform = 'scale(1.04)';
-                    });
                 }
             })();
     </script>
